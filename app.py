@@ -8,7 +8,7 @@ import os
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, origins=["https://bullbrief-frontend.vercel.app/"])
+CORS(app, origins=["https://bullbrief-frontend.vercel.app"])
 
 # Register all app routes (e.g., /summary, /eps, etc.)
 register_routes(app)
