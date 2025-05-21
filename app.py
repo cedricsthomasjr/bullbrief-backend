@@ -1,25 +1,24 @@
 # backend/main.py
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 from routes import register_routes
-import sys
 import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["https://bullbrief.vercel.app"])
 
+# Register all app routes (e.g., /summary, /eps, etc.)
 register_routes(app)
 
-if __name__ == "__main__":
-    app.run(debug=True)
-from flask import Flask, jsonify
-
-app = Flask(__name__)
-
+# Root route for Render healthcheck
 @app.route("/")
 def home():
     return jsonify({"status": "BullBrief API is live"})
+
+# Render-compatible server start
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
