@@ -9,13 +9,37 @@ Market Cap: {market_cap}
 P/E Ratio: {pe_ratio}
 52-Week Range: {range_52w}
 
-Format your response using the **exact headers below** (do not rename or reword):
+Format your response using the **exact headers below** (do not rename or reword).  
+For the **SWOT** section, include **exactly 4 concise bullet points** for each of: Strengths, Weaknesses, Opportunities, and Threats.
 
 Business Summary  
 ----------------
 
 SWOT  
-----------------
+----------------  
+**Strengths:**  
+-  
+-  
+-  
+-  
+
+**Weaknesses:**  
+-  
+-  
+-  
+-  
+
+**Opportunities:**  
+-  
+-  
+-  
+-  
+
+**Threats:**  
+-  
+-  
+-  
+-  
 
 Outlook  
 ----------------
