@@ -12,6 +12,8 @@ from routes.compare_summary import compare_bp  # ✅ correct import
 from .summary import summary_single_bp
 from .market import market_bp
 from routes.metadata import metadata_router
+from .peers import peers_bp
+from routes.insight import insight_bp
 
 def register_routes(app):
     app.register_blueprint(summary_bp)
@@ -28,4 +30,5 @@ def register_routes(app):
     app.register_blueprint(summary_single_bp)
     app.register_blueprint(market_bp)
     app.register_blueprint(metadata_router)
-
+    app.register_blueprint(peers_bp)
+    app.register_blueprint(insight_bp)

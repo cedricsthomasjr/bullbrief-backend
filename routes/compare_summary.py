@@ -94,11 +94,12 @@ Company data:
 
         # Master comparison prompt
         comparison_prompt = f"""
-You're an investment analyst. Using the summaries below, write a single investor-ready comparison paragraph that answers:
+You're an investment analyst. Using the summaries below, write a single investor-ready concise comparison paragraph that answers:
 
-1. Which company is most attractively valued (P/E)?
-2. Which is most profitable (ROE)?
+1. Which company is most attractively valued?
+2. Which is most profitable?
 3. Which has the best margins?
+4. Which has the best outlook?
 
 Conclude with a brief recommendation on which company stands out overall.
 
