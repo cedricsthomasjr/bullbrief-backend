@@ -26,7 +26,7 @@ def search_ticker(query):
     matches = [
         item for item in TICKER_CACHE
         if q in item["symbol"].lower() or q in item["name"].lower()
-    ]
+    ][:5]
 
     enriched = []
     for item in matches:
