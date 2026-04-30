@@ -14,6 +14,8 @@ from .market import market_bp
 from routes.metadata import metadata_router
 from .peers import peers_bp
 from routes.insight import insight_bp
+from .analyst import analyst_bp
+from .drivers import drivers_bp
 
 def register_routes(app):
     app.register_blueprint(summary_bp)
@@ -32,3 +34,5 @@ def register_routes(app):
     app.register_blueprint(metadata_router)
     app.register_blueprint(peers_bp)
     app.register_blueprint(insight_bp)
+    app.register_blueprint(analyst_bp)
+    app.register_blueprint(drivers_bp)

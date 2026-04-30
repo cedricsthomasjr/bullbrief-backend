@@ -2,7 +2,6 @@
 from flask import Blueprint, request, jsonify
 import requests
 import os
-import urllib.parse
 
 market_bp = Blueprint("market", __name__)
 FMP_API_KEY = os.getenv("FMP_API_KEY")
@@ -15,11 +14,14 @@ def get_market_quote():
         return jsonify({"error": "Missing symbol"}), 400
 
     try:
-        encoded_symbol = urllib.parse.quote(symbol)  # <-- KEY FIX
-        url = f"https://financialmodelingprep.com/api/v3/quote/{encoded_symbol}?apikey={FMP_API_KEY}"
-        print("→ Requesting:", url)
+        url = "https://financialmodelingprep.com/stable/quote"
+        print("Requesting FMP quote for:", symbol)
 
-        response = requests.get(url)
+        response = requests.get(
+            url,
+            params={"symbol": symbol, "apikey": FMP_API_KEY},
+            timeout=10,
+        )
         response.raise_for_status()
         data = response.json()
         if not data:
@@ -31,7 +33,7 @@ def get_market_quote():
             "symbol": quote.get("symbol"),
             "price": quote.get("price"),
             "change": quote.get("change"),
-            "percent": quote.get("changesPercentage"),
+            "percent": quote.get("changePercentage", quote.get("changesPercentage")),
         })
 
     except Exception as e:
