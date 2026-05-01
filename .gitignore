@@ -1,6 +1,57 @@
+# ─── Virtual environments ─────────────────────────────────────────────────────
 venv/
+.venv/
+env/
+.env_dir/
+
+# ─── Python cache / compiled ──────────────────────────────────────────────────
 __pycache__/
-.env
+*.py[cod]
+*$py.class
 *.pyc
+*.pyo
+*.pyd
+
+# ─── Distribution / packaging ─────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+
+# ─── Environment variables ────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Testing / coverage ───────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+.tox/
+
+# ─── Type checking / linting ──────────────────────────────────────────────────
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# ─── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
 *.log
+logs/
+
+# ─── Instance / secrets ───────────────────────────────────────────────────────
+instance/
+*.pem
+*.key
+
+# ─── OS / editor ──────────────────────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
