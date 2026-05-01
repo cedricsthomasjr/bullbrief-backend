@@ -2,10 +2,11 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from routes import register_routes
 import os
 
 load_dotenv()
+
+from routes import register_routes
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": [

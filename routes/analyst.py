@@ -52,7 +52,7 @@ def get_analyst_report(ticker):
         analyst_count  = info.get("numberOfAnalystOpinions")
 
         prompt = f"""
-You are a senior equity research analyst at a bulge-bracket investment bank. Generate a comprehensive, data-driven analyst report for {company_name} ({ticker.upper()}).
+You are a senior  research analyst at a bulge-bracket investment bank. Generate a comprehensive, data-driven analyst report for {company_name} ({ticker.upper()}).
 
 Financial data:
 - Sector / Industry: {sector} / {industry}

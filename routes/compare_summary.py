@@ -26,7 +26,8 @@ def fetch_ticker_data(ticker):
             "pe_ratio": safe(info.get("trailingPE")),
             "roe": safe(info.get("returnOnEquity")),
             "profit_margin": safe(info.get("profitMargins")),
-            "sector": info.get("sector")
+            "sector": info.get("sector"),
+            "industry": info.get("industry")
         }
 
     except Exception as e:
@@ -92,34 +93,10 @@ Company data:
             print(f"[❌ JSON ERROR] Raw GPT output:\n{raw_content}")
             return jsonify({"error": "Failed to parse AI response"}), 500
 
-        # Master comparison prompt
-        comparison_prompt = f"""
-You're an investment analyst. Using the summaries below, write a single investor-ready concise comparison paragraph that answers:
-
-1. Which company is most attractively valued?
-2. Which is most profitable?
-3. Which has the best margins?
-4. Which has the best outlook?
-
-Conclude with a brief recommendation on which company stands out overall.
-
-Respond in plain English. Do not include headers. Use a professional tone.
-
-Summaries:
-{json.dumps(parsed_insights, indent=2)}
-"""
-
-        master_response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": comparison_prompt}]
-        )
-
-        master_summary = master_response.choices[0].message.content
-
         return jsonify({
             "tickers": companies,
             "insights": parsed_insights,
-            "master_insight": master_summary
+            "master_insight": ""
         })
 
     except Exception as e:
