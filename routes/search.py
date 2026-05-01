@@ -28,6 +28,7 @@ def preload_tickers_from_csv():
                 "symbol": row["symbol"],
                 "name": row["name"],
                 "market_cap": int(row["market_cap"]),
+                "exchange": row.get("exchange", ""),
             }
             for row in reader
         ], key=lambda x: x["market_cap"], reverse=True)
@@ -62,7 +63,7 @@ def search_ticker(query):
     matches = [
         {
             **item,
-            "exchange": "",
+            "exchange": item.get("exchange", ""),
             "sector": "",
             "industry": "",
         }
