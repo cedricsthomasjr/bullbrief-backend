@@ -10,7 +10,11 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": [
     "https://bullbrief-frontend.vercel.app",
-    "http://localhost:3000", "https://www.bullbrief.pro"
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "https://www.bullbrief.pro"
 ]}})
 
 

@@ -67,7 +67,7 @@ Financial data:
 - Free Cash Flow: ${free_cashflow}
 - Beta: {beta} | Dividend Yield: {div_yield}
 - Short % of Float: {short_pct} | Institutional Ownership: {inst_own}
-- 52-Week Range: ${wk52_low} – ${wk52_high}
+- 52-Week Range: ${wk52_low} - ${wk52_high}
 - Consensus Price Target: ${target_price} ({analyst_count} analysts)
 
 Return a JSON object with EXACTLY this schema (no markdown, no extra fields):
@@ -76,9 +76,9 @@ Return a JSON object with EXACTLY this schema (no markdown, no extra fields):
   "rating": "STRONG BUY" | "BUY" | "HOLD" | "SELL" | "STRONG SELL",
   "confidence": <integer 55-97>,
   "price_target": {{
-    "low": <number — conservative 12-month estimate>,
-    "mid": <number — base-case 12-month estimate>,
-    "high": <number — bull-case 12-month estimate>
+    "low": <number - conservative 12-month estimate>,
+    "mid": <number - base-case 12-month estimate>,
+    "high": <number - bull-case 12-month estimate>
   }},
   "scores": {{
     "valuation":            <integer 1-10>,
@@ -97,16 +97,16 @@ Return a JSON object with EXACTLY this schema (no markdown, no extra fields):
     "momentum":             "<one precise sentence about price action or trend>"
   }},
   "bull_thesis": [
-    "<data-backed bullish point — cite a metric>",
-    "<data-backed bullish point — cite a metric>",
-    "<data-backed bullish point — cite a metric>",
-    "<data-backed bullish point — cite a metric>"
+    "<data-backed bullish point - cite a metric>",
+    "<data-backed bullish point - cite a metric>",
+    "<data-backed bullish point - cite a metric>",
+    "<data-backed bullish point - cite a metric>"
   ],
   "bear_thesis": [
-    "<data-backed bearish point — cite a metric>",
-    "<data-backed bearish point — cite a metric>",
-    "<data-backed bearish point — cite a metric>",
-    "<data-backed bearish point — cite a metric>"
+    "<data-backed bearish point - cite a metric>",
+    "<data-backed bearish point - cite a metric>",
+    "<data-backed bearish point - cite a metric>",
+    "<data-backed bearish point - cite a metric>"
   ],
   "catalysts": [
     {{"title": "<name>", "description": "<1-2 sentences>", "timeline": "Near-term"}},
@@ -123,7 +123,7 @@ Return a JSON object with EXACTLY this schema (no markdown, no extra fields):
 }}
 
 Rules:
-- Use actual numbers from the data above — do not hallucinate metrics.
+- Use actual numbers from the data above - do not hallucinate metrics.
 - Be specific: cite P/E, margins, growth rates, etc. in the thesis points.
 - Price targets must be derived from current price with realistic upside/downside.
 - Confidence reflects how decisive the data is (higher = more one-sided data).
@@ -133,7 +133,7 @@ Rules:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a senior equity research analyst. Respond with valid JSON only — no markdown, no code fences."},
+                {"role": "system", "content": "You are a senior equity research analyst. Respond with valid JSON only - no markdown, no code fences."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.35,

@@ -8,7 +8,7 @@ def normalize_section_name(name):
     return name.title()
 
 def split_sections(text):
-    pattern = r"(?:^|\n)(#{1,3}|\*+)?\s*(Business Summary|SWOT(?: Analysis)?|Outlook)\s*[:\-–]*\s*\n"
+    pattern = r"(?:^|\n)(#{1,3}|\*+)?\s*(Business Summary|SWOT(?: Analysis)?|Outlook)\s*[:\-]*\s*\n"
     matches = list(re.finditer(pattern, text, re.IGNORECASE))
 
     if not matches:

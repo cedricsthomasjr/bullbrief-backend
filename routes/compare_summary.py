@@ -73,7 +73,7 @@ You're an equity research assistant. For each company below, return a JSON array
 
 Each field should be a full paragraph in a clear, professional tone.
 
-Respond with valid JSON only — no markdown, no commentary.
+Respond with valid JSON only - no markdown, no commentary.
 
 Company data:
 {company_metrics}
