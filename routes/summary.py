@@ -100,7 +100,7 @@ def summary_single(ticker):
         prompt = f"Summarize the financial performance of {info.get('shortName')} ({ticker.upper()}): PE={pe}, ROE={roe}, Margin={margin}."
 
         response = client.chat.completions.create(
-            model="gpt-o4-mini",
+            model="gpt-5.4",
             messages=[{"role": "user", "content": prompt}]
         )
 
