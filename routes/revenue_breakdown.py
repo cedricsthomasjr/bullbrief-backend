@@ -1,4 +1,5 @@
 import time
+from datetime import date
 
 import requests
 from flask import Blueprint, jsonify
@@ -69,21 +70,75 @@ def _get_company_facts(cik: str) -> dict:
     return data
 
 
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _duration_days(entry: dict) -> int | None:
+    start = _parse_date(entry.get("start"))
+    end = _parse_date(entry.get("end"))
+    if not start or not end:
+        return None
+    return (end - start).days
+
+
+def _is_annual_fact(entry: dict, *, require_segment: bool | None = None) -> bool:
+    if entry.get("form") not in ("10-K", "10-K/A"):
+        return False
+    if entry.get("fp") != "FY":
+        return False
+    if not isinstance(entry.get("val"), (int, float)):
+        return False
+
+    has_segment = "segment" in entry
+    if require_segment is True and not has_segment:
+        return False
+    if require_segment is False and has_segment:
+        return False
+
+    duration = _duration_days(entry)
+    if duration is not None and not 250 <= duration <= 450:
+        return False
+
+    return True
+
+
+def _entry_sort_key(entry: dict) -> tuple:
+    return (
+        entry.get("end", ""),
+        entry.get("fy") or 0,
+        entry.get("filed", ""),
+        entry.get("accn", ""),
+    )
+
+
 def _extract_totals(units: list) -> dict:
     """Return {fy: value} for 10-K FY entries without a segment dimension."""
-    totals: dict = {}
-    candidates = [
-        e for e in units
-        if e.get("form") in ("10-K", "10-K/A")
-        and e.get("fp") == "FY"
-        and "segment" not in e
-        and isinstance(e.get("val"), (int, float))
-    ]
-    for e in sorted(candidates, key=lambda x: x.get("filed", "")):
+    totals_by_fy: dict = {}
+    candidates = [e for e in units if _is_annual_fact(e, require_segment=False)]
+
+    for e in candidates:
         fy = e.get("fy")
-        if fy:
-            totals[fy] = e["val"]
-    return totals
+        if not fy:
+            continue
+
+        existing = totals_by_fy.get(fy)
+        if existing is None or _entry_sort_key(e) >= _entry_sort_key(existing):
+            totals_by_fy[fy] = e
+
+    return {fy: entry["val"] for fy, entry in totals_by_fy.items()}
+
+
+def _totals_sort_key(totals: dict) -> tuple:
+    if not totals:
+        return ("", 0)
+    latest_fy = max(totals)
+    return (latest_fy, len(totals))
 
 
 def _clean_label(raw: str) -> str:
@@ -98,13 +153,7 @@ def _extract_segments(units: list, axes: list) -> tuple[dict, str | None]:
     Returns (segment_by_year, dimension_used).
     segment_by_year: {fy: {label: {val, filed}}}
     """
-    annual_with_seg = [
-        e for e in units
-        if e.get("form") in ("10-K", "10-K/A")
-        and e.get("fp") == "FY"
-        and "segment" in e
-        and isinstance(e.get("val"), (int, float))
-    ]
+    annual_with_seg = [e for e in units if _is_annual_fact(e, require_segment=True)]
     if not annual_with_seg:
         return {}, None
 
@@ -133,6 +182,10 @@ def _extract_segments(units: list, axes: list) -> tuple[dict, str | None]:
     return {}, None
 
 
+def _latest_segment_year(segment_by_year: dict) -> int:
+    return max(segment_by_year) if segment_by_year else 0
+
+
 @revenue_breakdown_bp.route("/revenue-breakdown/<ticker>", methods=["GET"])
 def get_revenue_breakdown(ticker: str):
     ticker = ticker.upper()
@@ -150,6 +203,7 @@ def get_revenue_breakdown(ticker: str):
         source_concept: str | None = None
         concept_label: str | None = None
 
+        best_segment_match: tuple | None = None
         for concept in REVENUE_CONCEPTS:
             concept_data = us_gaap.get(concept, {})
             units = concept_data.get("units", {}).get("USD", [])
@@ -157,31 +211,49 @@ def get_revenue_breakdown(ticker: str):
                 continue
 
             # Preferred axes first, then fallback
-            for axes in (PREFERRED_AXES, FALLBACK_AXES):
-                segs, _ = _extract_segments(units, axes)
+            for axis_priority, axes in enumerate((PREFERRED_AXES, FALLBACK_AXES)):
+                segs, dimension = _extract_segments(units, axes)
                 if segs:
-                    segment_by_year = segs
-                    total_by_year = _extract_totals(units)
-                    source_concept = concept
-                    concept_label = concept_data.get("label", concept)
-                    break
+                    totals = _extract_totals(units)
+                    match_key = (
+                        -axis_priority,
+                        _latest_segment_year(segs),
+                        len(segs),
+                    )
+                    if best_segment_match is None or match_key > best_segment_match[0]:
+                        best_segment_match = (
+                            match_key,
+                            segs,
+                            totals,
+                            concept,
+                            concept_data.get("label", concept),
+                            dimension,
+                        )
 
-            if segment_by_year:
-                break
+        if best_segment_match:
+            _, segment_by_year, total_by_year, source_concept, concept_label, _ = best_segment_match
 
         # Last resort: no segment data at all — use total revenue as single series
         if not segment_by_year:
+            best_totals_match: tuple | None = None
             for concept in REVENUE_CONCEPTS:
                 concept_data = us_gaap.get(concept, {})
                 units = concept_data.get("units", {}).get("USD", [])
                 totals = _extract_totals(units)
                 if totals:
-                    source_concept = concept
-                    concept_label = concept_data.get("label", concept)
-                    total_by_year = totals
-                    for fy, val in totals.items():
-                        segment_by_year[fy] = {"Total Revenue": {"val": val, "filed": ""}}
-                    break
+                    match_key = _totals_sort_key(totals)
+                    if best_totals_match is None or match_key > best_totals_match[0]:
+                        best_totals_match = (
+                            match_key,
+                            totals,
+                            concept,
+                            concept_data.get("label", concept),
+                        )
+
+            if best_totals_match:
+                _, total_by_year, source_concept, concept_label = best_totals_match
+                for fy, val in total_by_year.items():
+                    segment_by_year[fy] = {"Total Revenue": {"val": val, "filed": ""}}
 
         if not segment_by_year:
             return jsonify({"error": "No revenue data found in SEC EDGAR"}), 404

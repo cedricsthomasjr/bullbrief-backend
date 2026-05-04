@@ -1,4 +1,5 @@
 from bs4 import BeautifulSoup
+from datetime import date
 from flask import Blueprint, jsonify
 from openai import OpenAI
 import json
@@ -22,6 +23,9 @@ FINANCIAL_TAGS = {
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "Revenues",
         "SalesRevenueNet",
+        "RevenueFromContractWithCustomerIncludingAssessedTax",
+        "SalesRevenueGoodsNet",
+        "NetRevenues",
     ],
     "gross_profit": ["GrossProfit"],
     "operating_income": ["OperatingIncomeLoss"],
@@ -34,6 +38,13 @@ FINANCIAL_TAGS = {
         "PaymentsToAcquireProductiveAssets",
     ],
 }
+
+CORE_FINANCIAL_DRIVER_KEYS = [
+    "revenue",
+    "gross_profit",
+    "operating_income",
+    "net_income",
+]
 
 
 def _sec_get(url):
@@ -55,40 +66,117 @@ def _ticker_to_cik(ticker):
     return _ticker_cache["data"].get(ticker.upper())
 
 
-def _latest_annual_fact(company_facts, tags):
+def _parse_date(value):
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _duration_days(fact):
+    start = _parse_date(fact.get("start"))
+    end = _parse_date(fact.get("end"))
+    if not start or not end:
+        return None
+    return (end - start).days
+
+
+def _is_company_total_annual_fact(fact):
+    if fact.get("form") not in {"10-K", "10-K/A"}:
+        return False
+    if fact.get("fp") != "FY":
+        return False
+    if "segment" in fact:
+        return False
+    if not isinstance(fact.get("val"), (int, float)):
+        return False
+
+    duration = _duration_days(fact)
+    if duration is not None and not 250 <= duration <= 450:
+        return False
+
+    return True
+
+
+def _fact_sort_key(fact):
+    return (
+        fact.get("end", ""),
+        fact.get("fy") or 0,
+        fact.get("filed", ""),
+        fact.get("accn", ""),
+    )
+
+
+def _latest_annual_fact(company_facts, tags, target_accession=None):
     facts = company_facts.get("facts", {}).get("us-gaap", {})
+    candidates = []
+
     for tag in tags:
         units = facts.get(tag, {}).get("units", {})
         usd_facts = units.get("USD", [])
-        annual = [
-            fact for fact in usd_facts
-            if fact.get("form") in {"10-K", "10-K/A"}
-            and fact.get("fp") == "FY"
-            and isinstance(fact.get("val"), (int, float))
-        ]
-        if annual:
-            fact = max(annual, key=lambda item: (item.get("filed", ""), item.get("end", "")))
-            return {
-                "tag": tag,
-                "label": facts.get(tag, {}).get("label", tag),
-                "value": fact.get("val"),
-                "fy": fact.get("fy"),
-                "filed": fact.get("filed"),
-                "end": fact.get("end"),
-                "form": fact.get("form"),
-            }
+
+        for fact in usd_facts:
+            if not _is_company_total_annual_fact(fact):
+                continue
+            if target_accession and fact.get("accn") != target_accession:
+                continue
+            candidates.append((tag, facts.get(tag, {}), fact))
+
+    if candidates:
+        tag, concept, fact = max(candidates, key=lambda item: _fact_sort_key(item[2]))
+        return {
+            "tag": tag,
+            "label": concept.get("label", tag),
+            "value": fact.get("val"),
+            "fy": fact.get("fy"),
+            "filed": fact.get("filed"),
+            "end": fact.get("end"),
+            "form": fact.get("form"),
+        }
+
     return None
 
 
-def _financial_facts(cik):
+def _financial_facts(cik, target_accession=None):
     facts_url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
     company_facts = _sec_get(facts_url).json()
     metrics = {}
     for key, tags in FINANCIAL_TAGS.items():
-        fact = _latest_annual_fact(company_facts, tags)
+        fact = _latest_annual_fact(company_facts, tags, target_accession=target_accession)
         if fact:
             metrics[key] = fact
     return metrics
+
+
+def _driver_label(metric_key):
+    return metric_key.replace("_", " ").title()
+
+
+def _canonical_financial_drivers(metrics, existing_drivers=None):
+    existing_by_label = {}
+    for driver in existing_drivers or []:
+        label = driver.get("label")
+        if isinstance(label, str):
+            existing_by_label[label.lower()] = driver
+
+    financial_drivers = []
+    for key in CORE_FINANCIAL_DRIVER_KEYS:
+        fact = metrics.get(key)
+        if not fact:
+            continue
+
+        label = _driver_label(key)
+        existing = existing_by_label.get(label.lower(), {})
+        description = existing.get("description") or fact.get("label") or "SEC annual line item"
+        financial_drivers.append({
+            "label": label,
+            "value": fact.get("value"),
+            "description": description,
+        })
+
+    return financial_drivers
 
 
 def _latest_10k(cik):
@@ -179,14 +267,7 @@ def _fallback_drivers(ticker, filing, metrics):
         "company_name": filing.get("company_name"),
         "summary": "SEC filing data was retrieved, but BullBrief could not generate a narrative breakdown.",
         "operations": [],
-        "financial_drivers": [
-            {
-                "label": metric.replace("_", " ").title(),
-                "value": fact.get("value"),
-                "description": fact.get("label"),
-            }
-            for metric, fact in metrics.items()
-        ],
+        "financial_drivers": _canonical_financial_drivers(metrics),
         "watch_items": [],
         "fiscal_year": revenue.get("fy"),
         "filing_date": filing.get("filing_date"),
@@ -205,7 +286,7 @@ def get_stock_drivers(ticker):
         if not filing:
             return jsonify({"error": "No recent annual SEC filing found for ticker."}), 404
 
-        metrics = _financial_facts(cik)
+        metrics = _financial_facts(cik, target_accession=filing.get("accession"))
         context = _filing_context(filing["url"])
         if not context:
             return jsonify(_fallback_drivers(ticker, filing, metrics))
@@ -270,6 +351,10 @@ SEC filing excerpts:
         revenue = metrics.get("revenue", {})
         drivers["ticker"] = ticker.upper()
         drivers["company_name"] = filing.get("company_name")
+        drivers["financial_drivers"] = _canonical_financial_drivers(
+            metrics,
+            drivers.get("financial_drivers") if isinstance(drivers.get("financial_drivers"), list) else None,
+        )
         drivers["fiscal_year"] = revenue.get("fy")
         drivers["filing_date"] = filing.get("filing_date")
         drivers["source"] = {"name": "SEC EDGAR", "url": filing.get("url")}
