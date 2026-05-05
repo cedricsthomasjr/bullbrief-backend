@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify
-import requests
+from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 
 executives_bp = Blueprint("executives", __name__)
@@ -8,9 +8,8 @@ executives_bp = Blueprint("executives", __name__)
 def get_executives(ticker):
     try:
         url = f"https://finance.yahoo.com/quote/{ticker}/profile/"
-        headers = {"User-Agent": "Mozilla/5.0"}
 
-        response = requests.get(url, headers=headers)
+        response = cffi_requests.get(url, impersonate="chrome", timeout=12)
         soup = BeautifulSoup(response.text, "html.parser")
 
         exec_section = soup.find("section", {"data-testid": "key-executives"})
