@@ -2,6 +2,8 @@
 from flask import Blueprint, jsonify
 from dotenv import load_dotenv
 import os
+import threading
+import time
 from curl_cffi import requests as cffi_requests
 from utils.prompt import generate_prompt
 from utils.sections import split_sections
@@ -15,9 +17,36 @@ client = OpenAI()
 _YF_SUMMARY_URL = "https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
 _MODULES = "price,summaryProfile,summaryDetail,defaultKeyStatistics,financialData"
 
+# ── Crumb cache (Yahoo Finance requires a session crumb for quoteSummary) ────
+_crumb_lock = threading.Lock()
+_crumb_cache: dict = {"crumb": None, "cookies": None, "ts": 0.0}
+_CRUMB_TTL = 3500  # seconds (~1 hour)
+
+
+def _refresh_crumb() -> tuple[str, object]:
+    r1 = cffi_requests.get("https://finance.yahoo.com", impersonate="chrome", timeout=12)
+    cookies = r1.cookies
+    r2 = cffi_requests.get(
+        "https://query2.finance.yahoo.com/v1/test/getcrumb",
+        cookies=cookies,
+        impersonate="chrome",
+        timeout=10,
+    )
+    crumb = r2.text.strip()
+    return crumb, cookies
+
+
+def _get_crumb() -> tuple[str, object]:
+    with _crumb_lock:
+        now = time.time()
+        if _crumb_cache["crumb"] and (now - _crumb_cache["ts"]) < _CRUMB_TTL:
+            return _crumb_cache["crumb"], _crumb_cache["cookies"]
+        crumb, cookies = _refresh_crumb()
+        _crumb_cache.update({"crumb": crumb, "cookies": cookies, "ts": now})
+        return crumb, cookies
+
 
 def _sv(d, key):
-    """Extract raw value from a Yahoo Finance dict-wrapped field or plain value."""
     v = d.get(key)
     if isinstance(v, dict):
         return v.get("raw")
@@ -25,12 +54,25 @@ def _sv(d, key):
 
 
 def _fetch_yf_info(ticker: str) -> dict:
-    r = cffi_requests.get(
-        _YF_SUMMARY_URL.format(ticker=ticker.upper()),
-        params={"modules": _MODULES, "corsDomain": "finance.yahoo.com"},
-        impersonate="chrome",
-        timeout=15,
-    )
+    crumb, cookies = _get_crumb()
+
+    def _call(crumb, cookies):
+        return cffi_requests.get(
+            _YF_SUMMARY_URL.format(ticker=ticker.upper()),
+            params={"modules": _MODULES, "crumb": crumb, "corsDomain": "finance.yahoo.com"},
+            cookies=cookies,
+            impersonate="chrome",
+            timeout=15,
+        )
+
+    r = _call(crumb, cookies)
+    if r.status_code == 401:
+        # Crumb expired — refresh once and retry
+        with _crumb_lock:
+            _crumb_cache["ts"] = 0.0
+        crumb, cookies = _get_crumb()
+        r = _call(crumb, cookies)
+
     r.raise_for_status()
     results = (r.json().get("quoteSummary") or {}).get("result") or []
     if not results:
