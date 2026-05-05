@@ -92,7 +92,7 @@ def _fetch_yf_info(ticker: str) -> dict:
         "trailingPE":                    _sv(detail, "trailingPE"),
         "fiftyTwoWeekLow":               _sv(detail, "fiftyTwoWeekLow"),
         "fiftyTwoWeekHigh":              _sv(detail, "fiftyTwoWeekHigh"),
-        "exchange":                      price.get("exchangeName") or price.get("exchange") or "NAS",
+        "exchange":                      price.get("exchange") or "NAS",
         "currentPrice":                  _sv(price,  "regularMarketPrice"),
         "trailingEps":                   _sv(stats,  "trailingEps"),
         "forwardPE":                     _sv(detail, "forwardPE")  or _sv(stats, "forwardPE"),
@@ -199,7 +199,7 @@ def summary_single(ticker):
 
         single_client = OpenAI()
         response = single_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4",
             messages=[{"role": "user", "content": prompt}]
         )
 

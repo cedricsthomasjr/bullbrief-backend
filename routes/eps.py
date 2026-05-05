@@ -9,11 +9,19 @@ def eps_route(ticker):
     if isinstance(result, str):  # error string
         return jsonify({"error": result}), 500
 
-    return jsonify({
+    payload = {
         "ticker": ticker.upper(),
         "metric": "EPS",
         "data": result["data"],
         "source": {
-            "historical": result["source"]
-        }
-    })
+            "historical": result["source"],
+            "historical_quarterly": result.get("quarterly_source"),
+        },
+    }
+    if result.get("quarterly_data"):
+        payload["quarterly_data"] = result["quarterly_data"]
+        payload["periods"] = ["annual", "quarterly"]
+    else:
+        payload["periods"] = ["annual"]
+
+    return jsonify(payload)

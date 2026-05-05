@@ -115,6 +115,44 @@ def _is_annual_fact(entry: dict, *, require_segment: bool | None = None) -> bool
     return True
 
 
+def _is_quarterly_fact(entry: dict, *, require_segment: bool | None = None) -> bool:
+    if entry.get("form") not in ("10-Q", "10-Q/A"):
+        return False
+    if entry.get("fp") not in ("Q1", "Q2", "Q3", "Q4"):
+        return False
+    if not isinstance(entry.get("val"), (int, float)):
+        return False
+
+    has_segment = "segment" in entry
+    if require_segment is True and not has_segment:
+        return False
+    if require_segment is False and has_segment:
+        return False
+
+    duration = _duration_days(entry)
+    if duration is None or not 60 <= duration <= 120:
+        return False
+
+    return True
+
+
+def _quarter_meta(entry: dict) -> dict | None:
+    fy = entry.get("fy")
+    fp = entry.get("fp")
+    end = entry.get("end")
+    if not fy or fp not in ("Q1", "Q2", "Q3", "Q4") or not end:
+        return None
+
+    return {
+        "key": f"{fy}-{fp}",
+        "label": f"FY{str(fy)[-2:]} {fp}",
+        "year": fy,
+        "fiscal_year": fy,
+        "fiscal_period": fp,
+        "end": end,
+    }
+
+
 def _entry_sort_key(entry: dict) -> tuple:
     return (
         entry.get("end", ""),
@@ -139,6 +177,30 @@ def _extract_totals(units: list) -> dict:
             totals_by_fy[fy] = e
 
     return {fy: entry["val"] for fy, entry in totals_by_fy.items()}
+
+
+def _extract_quarterly_totals(units: list) -> dict:
+    """Return {period_key: {val, filed, meta}} for discrete 10-Q entries."""
+    totals_by_period: dict = {}
+    candidates = [e for e in units if _is_quarterly_fact(e, require_segment=False)]
+
+    for e in candidates:
+        meta = _quarter_meta(e)
+        if not meta:
+            continue
+
+        existing = totals_by_period.get(meta["key"])
+        if existing is None or _entry_sort_key(e) >= _entry_sort_key(existing["entry"]):
+            totals_by_period[meta["key"]] = {"entry": e, "meta": meta}
+
+    return {
+        key: {
+            "val": item["entry"]["val"],
+            "filed": item["entry"].get("filed", ""),
+            "meta": item["meta"],
+        }
+        for key, item in totals_by_period.items()
+    }
 
 
 def _totals_sort_key(totals: dict) -> tuple:
@@ -207,26 +269,61 @@ def _get_fmp_profile(ticker: str) -> dict:
     return {}
 
 
-def _extract_fmp_product_segments(ticker: str) -> dict | None:
+def _fmp_period_sort_key(row: dict) -> tuple:
+    return (
+        str(row.get("date", "")),
+        row.get("year") or 0,
+        row.get("fiscal_period") or "",
+    )
+
+
+def _normalize_fmp_period_label(row: dict, requested_period: str) -> dict | None:
+    row_date = str(row.get("date", ""))
+    fy = row.get("fiscalYear")
+    if not isinstance(fy, int):
+        fy = int(row_date[:4]) if row_date[:4].isdigit() else None
+    if not fy:
+        return None
+
+    if requested_period == "annual":
+        if row.get("period") not in (None, "FY", "annual"):
+            return None
+        return {"key": str(fy), "year": fy}
+
+    raw_period = str(row.get("period", "")).upper()
+    if raw_period not in ("Q1", "Q2", "Q3", "Q4"):
+        return None
+
+    return {
+        "key": f"{fy}-{raw_period}",
+        "label": f"FY{str(fy)[-2:]} {raw_period}",
+        "year": fy,
+        "fiscal_year": fy,
+        "fiscal_period": raw_period,
+        "end": row_date,
+    }
+
+
+def _extract_fmp_period_segments(ticker: str, requested_period: str) -> dict | None:
     data = _fmp_get(
         FMP_PRODUCT_SEGMENTATION_URL,
-        {"symbol": ticker.upper(), "period": "annual", "structure": "flat"},
+        {"symbol": ticker.upper(), "period": requested_period, "structure": "flat"},
     )
+    if (not isinstance(data, list) or not data) and requested_period == "quarter":
+        data = _fmp_get(
+            FMP_PRODUCT_SEGMENTATION_URL,
+            {"symbol": ticker.upper(), "period": "quarterly", "structure": "flat"},
+        )
     if not isinstance(data, list):
         return None
 
-    by_year: dict = {}
+    by_period: dict = {}
     for row in data:
         if not isinstance(row, dict):
             continue
-        if row.get("period") not in (None, "FY", "annual"):
-            continue
 
-        fy = row.get("fiscalYear")
-        if not isinstance(fy, int):
-            row_date = str(row.get("date", ""))
-            fy = int(row_date[:4]) if row_date[:4].isdigit() else None
-        if not fy:
+        period_meta = _normalize_fmp_period_label(row, requested_period)
+        if not period_meta:
             continue
 
         raw_breakdown = row.get("data")
@@ -245,19 +342,22 @@ def _extract_fmp_product_segments(ticker: str) -> dict | None:
         if total <= 0:
             continue
 
-        existing = by_year.get(fy)
-        if existing is None or str(row.get("date", "")) >= str(existing.get("date", "")):
-            by_year[fy] = {
-                "date": row.get("date", ""),
-                "total": total,
-                "breakdown": breakdown,
-            }
+        item = {
+            **period_meta,
+            "date": row.get("date", ""),
+            "total": total,
+            "breakdown": breakdown,
+        }
+        existing = by_period.get(period_meta["key"])
+        if existing is None or _fmp_period_sort_key(item) >= _fmp_period_sort_key(existing):
+            by_period[period_meta["key"]] = item
 
-    if not by_year:
-        return None
+    return by_period or None
 
-    latest_year = max(by_year)
-    latest_breakdown = by_year[latest_year]["breakdown"]
+
+def _shape_fmp_segments(by_period: dict, requested_period: str, limit: int) -> tuple[list, list]:
+    latest_key = max(by_period, key=lambda key: _fmp_period_sort_key(by_period[key]))
+    latest_breakdown = by_period[latest_key]["breakdown"]
     current_segments = [
         segment
         for segment in sorted(latest_breakdown, key=lambda s: latest_breakdown[s], reverse=True)
@@ -267,15 +367,15 @@ def _extract_fmp_product_segments(ticker: str) -> dict | None:
     initial_set = set(initial_segments)
     overflow_exists = any(
         segment not in initial_set and value > 0
-        for year_data in by_year.values()
-        for segment, value in year_data["breakdown"].items()
+        for period_data in by_period.values()
+        for segment, value in period_data["breakdown"].items()
     )
     top_segments = current_segments[:9] if overflow_exists and len(initial_segments) >= 10 else initial_segments
     top_set = set(top_segments)
     include_other = any(
         segment not in top_set and value > 0
-        for year_data in by_year.values()
-        for segment, value in year_data["breakdown"].items()
+        for period_data in by_period.values()
+        for segment, value in period_data["breakdown"].items()
     )
     visible_segments = top_segments + (["Other"] if include_other else [])
 
@@ -284,17 +384,45 @@ def _extract_fmp_product_segments(ticker: str) -> dict | None:
         for i, segment in enumerate(visible_segments)
     ]
 
-    years = sorted(by_year)[-6:]
-    years_data = []
-    for fy in years:
-        row = by_year[fy]
+    period_keys = sorted(by_period, key=lambda key: _fmp_period_sort_key(by_period[key]))[-limit:]
+    period_data = []
+    for key in period_keys:
+        row = by_period[key]
         source_breakdown = row["breakdown"]
         breakdown = {segment: source_breakdown.get(segment, 0) for segment in top_segments}
         if include_other:
             breakdown["Other"] = sum(
                 value for segment, value in source_breakdown.items() if segment not in top_set
             )
-        years_data.append({"year": fy, "total": row["total"], "breakdown": breakdown})
+
+        if requested_period == "annual":
+            period_data.append({"year": row["year"], "total": row["total"], "breakdown": breakdown})
+        else:
+            period_data.append({
+                "label": row["label"],
+                "year": row["year"],
+                "fiscal_year": row["fiscal_year"],
+                "fiscal_period": row["fiscal_period"],
+                "end": row["end"],
+                "total": row["total"],
+                "breakdown": breakdown,
+            })
+
+    return segments_meta, period_data
+
+
+def _extract_fmp_product_segments(ticker: str) -> dict | None:
+    annual_periods = _extract_fmp_period_segments(ticker, "annual")
+    if not annual_periods:
+        return None
+
+    segments_meta, years_data = _shape_fmp_segments(annual_periods, "annual", 6)
+
+    quarterly_periods = _extract_fmp_period_segments(ticker, "quarter")
+    quarterly_segments_meta = []
+    quarters_data = []
+    if quarterly_periods:
+        quarterly_segments_meta, quarters_data = _shape_fmp_segments(quarterly_periods, "quarter", 12)
 
     profile = _get_fmp_profile(ticker)
     cik = str(profile.get("cik", "")).zfill(10) if profile.get("cik") else _get_cik(ticker)
@@ -313,6 +441,10 @@ def _extract_fmp_product_segments(ticker: str) -> dict | None:
         "source_url": filing_url or FMP_REVENUE_SEGMENTATION_DOC_URL,
         "filing_url": filing_url,
         "has_segments": len(segments_meta) > 1 or segments_meta[0]["name"] != "Total Revenue",
+        "quarterly_segments": quarterly_segments_meta,
+        "quarters": quarters_data,
+        "quarterly_source_name": "FMP Revenue Product Segmentation API" if quarters_data else None,
+        "periods": ["annual", *([] if not quarters_data else ["quarterly"])],
     }
 
 
@@ -351,8 +483,182 @@ def _extract_segments(units: list, axes: list) -> tuple[dict, str | None]:
     return {}, None
 
 
+def _extract_quarterly_segments(units: list, axes: list) -> tuple[dict, str | None, dict]:
+    """
+    Return discrete 10-Q segment revenue.
+    segment_by_period: {period_key: {label: {val, filed}}}
+    meta_by_period: {period_key: {label, fiscal_year, fiscal_period, end}}
+    """
+    quarterly_with_seg = [e for e in units if _is_quarterly_fact(e, require_segment=True)]
+    if not quarterly_with_seg:
+        return {}, None, {}
+
+    by_dim: dict = {}
+    for e in quarterly_with_seg:
+        dim = e.get("segment", {}).get("dimension", "")
+        by_dim.setdefault(dim, []).append(e)
+
+    for target_axis in axes:
+        for dim, entries in by_dim.items():
+            if target_axis.lower() in dim.lower():
+                result: dict = {}
+                meta_by_period: dict = {}
+                for e in entries:
+                    meta = _quarter_meta(e)
+                    if not meta:
+                        continue
+
+                    key = meta["key"]
+                    seg = e.get("segment", {})
+                    label = _clean_label(seg.get("label") or seg.get("value", "Other"))
+                    result.setdefault(key, {})
+                    meta_by_period[key] = meta
+                    existing = result[key].get(label)
+                    if existing is None or e.get("filed", "") >= existing.get("filed", ""):
+                        result[key][label] = {"val": e["val"], "filed": e.get("filed", "")}
+                if result:
+                    return result, dim, meta_by_period
+    return {}, None, {}
+
+
 def _latest_segment_year(segment_by_year: dict) -> int:
     return max(segment_by_year) if segment_by_year else 0
+
+
+def _latest_quarter_end(meta_by_period: dict) -> str:
+    if not meta_by_period:
+        return ""
+    return max(str(meta.get("end", "")) for meta in meta_by_period.values())
+
+
+def _shape_sec_quarters(
+    segment_by_period: dict,
+    total_by_period: dict,
+    meta_by_period: dict,
+) -> tuple[list, list]:
+    if not segment_by_period:
+        return [], []
+
+    seg_totals: dict = {}
+    for period_data in segment_by_period.values():
+        for seg, info in period_data.items():
+            seg_totals[seg] = seg_totals.get(seg, 0) + info["val"]
+
+    sorted_segs = sorted(seg_totals, key=lambda s: seg_totals[s], reverse=True)[:10]
+    segments_meta = [
+        {"name": seg, "color": SEGMENT_COLORS[i % len(SEGMENT_COLORS)]}
+        for i, seg in enumerate(sorted_segs)
+    ]
+
+    period_keys = sorted(
+        segment_by_period,
+        key=lambda key: meta_by_period.get(key, {}).get("end", ""),
+    )[-12:]
+    quarters_data = []
+    for key in period_keys:
+        period_data = segment_by_period.get(key, {})
+        breakdown = {seg: period_data.get(seg, {}).get("val", 0) for seg in sorted_segs}
+        total_row = total_by_period.get(key)
+        total = total_row.get("val") if total_row else sum(breakdown.values())
+        meta = meta_by_period.get(key) or (total_row.get("meta") if total_row else None)
+        if not meta:
+            continue
+
+        quarters_data.append({
+            "label": meta["label"],
+            "year": meta["year"],
+            "fiscal_year": meta["fiscal_year"],
+            "fiscal_period": meta["fiscal_period"],
+            "end": meta["end"],
+            "total": total,
+            "breakdown": breakdown,
+        })
+
+    return segments_meta, quarters_data
+
+
+def _extract_sec_quarterly_revenue(us_gaap: dict) -> dict:
+    segment_by_period: dict = {}
+    total_by_period: dict = {}
+    meta_by_period: dict = {}
+    source_concept: str | None = None
+    concept_label: str | None = None
+    dimension_used: str | None = None
+
+    best_segment_match: tuple | None = None
+    for concept in REVENUE_CONCEPTS:
+        concept_data = us_gaap.get(concept, {})
+        units = concept_data.get("units", {}).get("USD", [])
+        if not units:
+            continue
+
+        for axis_priority, axes in enumerate((PREFERRED_AXES, FALLBACK_AXES)):
+            segs, dimension, metas = _extract_quarterly_segments(units, axes)
+            if segs:
+                totals = _extract_quarterly_totals(units)
+                match_key = (
+                    -axis_priority,
+                    _latest_quarter_end(metas),
+                    len(segs),
+                )
+                if best_segment_match is None or match_key > best_segment_match[0]:
+                    best_segment_match = (
+                        match_key,
+                        segs,
+                        totals,
+                        metas,
+                        concept,
+                        concept_data.get("label", concept),
+                        dimension,
+                    )
+
+    if best_segment_match:
+        (
+            _,
+            segment_by_period,
+            total_by_period,
+            meta_by_period,
+            source_concept,
+            concept_label,
+            dimension_used,
+        ) = best_segment_match
+
+    if not segment_by_period:
+        best_totals_match: tuple | None = None
+        for concept in REVENUE_CONCEPTS:
+            concept_data = us_gaap.get(concept, {})
+            units = concept_data.get("units", {}).get("USD", [])
+            totals = _extract_quarterly_totals(units)
+            if totals:
+                metas = {key: row["meta"] for key, row in totals.items()}
+                match_key = (_latest_quarter_end(metas), len(totals))
+                if best_totals_match is None or match_key > best_totals_match[0]:
+                    best_totals_match = (
+                        match_key,
+                        totals,
+                        metas,
+                        concept,
+                        concept_data.get("label", concept),
+                    )
+
+        if best_totals_match:
+            _, total_by_period, meta_by_period, source_concept, concept_label = best_totals_match
+            for key, row in total_by_period.items():
+                segment_by_period[key] = {"Total Revenue": {"val": row["val"], "filed": row.get("filed", "")}}
+
+    quarterly_segments, quarters = _shape_sec_quarters(
+        segment_by_period,
+        total_by_period,
+        meta_by_period,
+    )
+
+    return {
+        "segments": quarterly_segments,
+        "quarters": quarters,
+        "concept": source_concept,
+        "concept_label": concept_label,
+        "dimension": dimension_used,
+    }
 
 
 @revenue_breakdown_bp.route("/revenue-breakdown/<ticker>", methods=["GET"])
@@ -458,6 +764,8 @@ def get_revenue_breakdown(ticker: str):
             years_data.append({"year": fy, "total": total, "breakdown": breakdown})
 
         source_url = _sec_10k_url(cik)
+        quarterly_payload = _extract_sec_quarterly_revenue(us_gaap)
+        quarters_data = quarterly_payload.get("quarters", [])
 
         return jsonify({
             "ticker": ticker,
@@ -471,6 +779,13 @@ def get_revenue_breakdown(ticker: str):
             "source_url": source_url,
             "filing_url": source_url,
             "has_segments": not (len(sorted_segs) == 1 and sorted_segs[0] == "Total Revenue"),
+            "quarterly_segments": quarterly_payload.get("segments", []),
+            "quarters": quarters_data,
+            "quarterly_concept": quarterly_payload.get("concept"),
+            "quarterly_concept_label": quarterly_payload.get("concept_label"),
+            "quarterly_dimension": quarterly_payload.get("dimension"),
+            "quarterly_source_name": "SEC EDGAR Company Facts XBRL API" if quarters_data else None,
+            "periods": ["annual", *([] if not quarters_data else ["quarterly"])],
         })
 
     except requests.exceptions.Timeout:

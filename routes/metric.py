@@ -31,13 +31,20 @@ def get_metric_data(ticker, metric):
     if isinstance(result, str):
         return jsonify({"error": result}), 500
 
-    return jsonify({
+    payload = {
         "ticker": ticker,
         "metric": metric,
         "label": definition["label"],
         "unit": definition["unit"],
         "data": result["data"],
         "source": {
-            "historical": result["source"]
-        }
-    })
+            "historical": result["source"],
+            "historical_quarterly": result.get("quarterly_source"),
+        },
+        "periods": ["annual"],
+    }
+    if result.get("quarterly_data"):
+        payload["quarterly_data"] = result["quarterly_data"]
+        payload["periods"] = ["annual", "quarterly"]
+
+    return jsonify(payload)
