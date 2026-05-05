@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import date
 
@@ -39,6 +40,12 @@ FALLBACK_AXES = [
     "StatementGeographicalAxis",
     "GeographicAreasRevenuesFromExternalCustomers",
 ]
+
+FMP_PRODUCT_SEGMENTATION_URL = "https://financialmodelingprep.com/stable/revenue-product-segmentation"
+FMP_PROFILE_URL = "https://financialmodelingprep.com/stable/profile"
+FMP_REVENUE_SEGMENTATION_DOC_URL = (
+    "https://site.financialmodelingprep.com/developer/docs/stable/revenue-product-segmentation"
+)
 
 _cik_cache: dict = {"loaded_at": 0, "data": {}}
 _facts_cache: dict = {}
@@ -147,6 +154,168 @@ def _clean_label(raw: str) -> str:
     return raw.strip()
 
 
+def _sec_10k_url(cik: str | None) -> str | None:
+    if not cik:
+        return None
+    cik_int = int(str(cik).lstrip("0") or "0")
+    return (
+        f"https://www.sec.gov/cgi-bin/browse-edgar"
+        f"?action=getcompany&CIK={cik_int:010d}&type=10-K&dateb=&owner=include&count=10"
+    )
+
+
+def _as_number(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _fmp_get(url: str, params: dict) -> list | dict | None:
+    api_key = os.getenv("FMP_API_KEY")
+    if not api_key:
+        return None
+
+    resp = requests.get(
+        url,
+        params={**params, "apikey": api_key},
+        timeout=20,
+    )
+    if resp.status_code in (401, 402, 403, 404):
+        return None
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict) and data.get("Error Message"):
+        return None
+    return data
+
+
+def _get_fmp_profile(ticker: str) -> dict:
+    try:
+        data = _fmp_get(FMP_PROFILE_URL, {"symbol": ticker.upper()})
+    except requests.exceptions.RequestException:
+        return {}
+
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return data[0]
+    return {}
+
+
+def _extract_fmp_product_segments(ticker: str) -> dict | None:
+    data = _fmp_get(
+        FMP_PRODUCT_SEGMENTATION_URL,
+        {"symbol": ticker.upper(), "period": "annual", "structure": "flat"},
+    )
+    if not isinstance(data, list):
+        return None
+
+    by_year: dict = {}
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        if row.get("period") not in (None, "FY", "annual"):
+            continue
+
+        fy = row.get("fiscalYear")
+        if not isinstance(fy, int):
+            row_date = str(row.get("date", ""))
+            fy = int(row_date[:4]) if row_date[:4].isdigit() else None
+        if not fy:
+            continue
+
+        raw_breakdown = row.get("data")
+        if not isinstance(raw_breakdown, dict):
+            continue
+
+        breakdown: dict = {}
+        for raw_label, raw_value in raw_breakdown.items():
+            value = _as_number(raw_value)
+            label = _clean_label(str(raw_label))
+            if value is None or value <= 0 or not label:
+                continue
+            breakdown[label] = breakdown.get(label, 0) + value
+
+        total = sum(breakdown.values())
+        if total <= 0:
+            continue
+
+        existing = by_year.get(fy)
+        if existing is None or str(row.get("date", "")) >= str(existing.get("date", "")):
+            by_year[fy] = {
+                "date": row.get("date", ""),
+                "total": total,
+                "breakdown": breakdown,
+            }
+
+    if not by_year:
+        return None
+
+    latest_year = max(by_year)
+    latest_breakdown = by_year[latest_year]["breakdown"]
+    current_segments = [
+        segment
+        for segment in sorted(latest_breakdown, key=lambda s: latest_breakdown[s], reverse=True)
+        if latest_breakdown.get(segment, 0) > 0
+    ]
+    initial_segments = current_segments[:10]
+    initial_set = set(initial_segments)
+    overflow_exists = any(
+        segment not in initial_set and value > 0
+        for year_data in by_year.values()
+        for segment, value in year_data["breakdown"].items()
+    )
+    top_segments = current_segments[:9] if overflow_exists and len(initial_segments) >= 10 else initial_segments
+    top_set = set(top_segments)
+    include_other = any(
+        segment not in top_set and value > 0
+        for year_data in by_year.values()
+        for segment, value in year_data["breakdown"].items()
+    )
+    visible_segments = top_segments + (["Other"] if include_other else [])
+
+    segments_meta = [
+        {"name": segment, "color": SEGMENT_COLORS[i % len(SEGMENT_COLORS)]}
+        for i, segment in enumerate(visible_segments)
+    ]
+
+    years = sorted(by_year)[-6:]
+    years_data = []
+    for fy in years:
+        row = by_year[fy]
+        source_breakdown = row["breakdown"]
+        breakdown = {segment: source_breakdown.get(segment, 0) for segment in top_segments}
+        if include_other:
+            breakdown["Other"] = sum(
+                value for segment, value in source_breakdown.items() if segment not in top_set
+            )
+        years_data.append({"year": fy, "total": row["total"], "breakdown": breakdown})
+
+    profile = _get_fmp_profile(ticker)
+    cik = str(profile.get("cik", "")).zfill(10) if profile.get("cik") else _get_cik(ticker)
+
+    filing_url = _sec_10k_url(cik)
+
+    return {
+        "ticker": ticker.upper(),
+        "company_name": profile.get("companyName") or ticker.upper(),
+        "concept": "revenue-product-segmentation",
+        "concept_label": "Revenue Product Segmentation",
+        "dimension": "ProductOrServiceAxis",
+        "source_name": "FMP Revenue Product Segmentation API",
+        "segments": segments_meta,
+        "years": years_data,
+        "source_url": filing_url or FMP_REVENUE_SEGMENTATION_DOC_URL,
+        "filing_url": filing_url,
+        "has_segments": len(segments_meta) > 1 or segments_meta[0]["name"] != "Total Revenue",
+    }
+
+
 def _extract_segments(units: list, axes: list) -> tuple[dict, str | None]:
     """
     Try to find segment-level revenue using the given axes.
@@ -190,6 +359,13 @@ def _latest_segment_year(segment_by_year: dict) -> int:
 def get_revenue_breakdown(ticker: str):
     ticker = ticker.upper()
     try:
+        try:
+            fmp_breakdown = _extract_fmp_product_segments(ticker)
+        except requests.exceptions.RequestException:
+            fmp_breakdown = None
+        if fmp_breakdown:
+            return jsonify(fmp_breakdown)
+
         cik = _get_cik(ticker)
         if not cik:
             return jsonify({"error": f"{ticker} not found in SEC EDGAR"}), 404
@@ -202,6 +378,7 @@ def get_revenue_breakdown(ticker: str):
         total_by_year: dict = {}
         source_concept: str | None = None
         concept_label: str | None = None
+        dimension_used: str | None = None
 
         best_segment_match: tuple | None = None
         for concept in REVENUE_CONCEPTS:
@@ -231,7 +408,7 @@ def get_revenue_breakdown(ticker: str):
                         )
 
         if best_segment_match:
-            _, segment_by_year, total_by_year, source_concept, concept_label, _ = best_segment_match
+            _, segment_by_year, total_by_year, source_concept, concept_label, dimension_used = best_segment_match
 
         # Last resort: no segment data at all — use total revenue as single series
         if not segment_by_year:
@@ -280,20 +457,19 @@ def get_revenue_breakdown(ticker: str):
             total = total_by_year.get(fy) or sum(breakdown.values())
             years_data.append({"year": fy, "total": total, "breakdown": breakdown})
 
-        cik_int = int(cik)
-        source_url = (
-            f"https://www.sec.gov/cgi-bin/browse-edgar"
-            f"?action=getcompany&CIK={cik_int:010d}&type=10-K&dateb=&owner=include&count=10"
-        )
+        source_url = _sec_10k_url(cik)
 
         return jsonify({
             "ticker": ticker,
             "company_name": entity_name,
             "concept": source_concept,
             "concept_label": concept_label,
+            "dimension": dimension_used,
+            "source_name": "SEC EDGAR Company Facts XBRL API",
             "segments": segments_meta,
             "years": years_data,
             "source_url": source_url,
+            "filing_url": source_url,
             "has_segments": not (len(sorted_segs) == 1 and sorted_segs[0] == "Total Revenue"),
         })
 

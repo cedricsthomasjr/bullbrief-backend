@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify
 from utils.financial_metrics import (
-    get_financial_metric_series,
+    get_financial_metric_series_with_source,
     get_financial_metrics_bundle,
     metric_definition,
 )
@@ -26,15 +26,18 @@ def get_metric_data(ticker, metric):
     if not definition:
         return jsonify({"error": "Unsupported metric"}), 400
 
-    data = get_financial_metric_series(ticker, metric)
+    result = get_financial_metric_series_with_source(ticker, metric)
 
-    if isinstance(data, str):
-        return jsonify({"error": data}), 500
+    if isinstance(result, str):
+        return jsonify({"error": result}), 500
 
     return jsonify({
         "ticker": ticker,
         "metric": metric,
         "label": definition["label"],
         "unit": definition["unit"],
-        "data": data
+        "data": result["data"],
+        "source": {
+            "historical": result["source"]
+        }
     })

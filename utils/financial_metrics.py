@@ -172,7 +172,7 @@ def _series_from_rows(rows: list[dict[str, Any]], field: str) -> list[dict[str, 
     return deduped
 
 
-def get_financial_metric_series(ticker: str, metric: str) -> list[dict[str, float | int]] | str:
+def get_financial_metric_series_with_source(ticker: str, metric: str) -> dict[str, Any] | str:
     definition = metric_definition(metric)
     if not definition:
         return "Unsupported metric"
@@ -181,7 +181,17 @@ def get_financial_metric_series(ticker: str, metric: str) -> list[dict[str, floa
     if isinstance(statement, str):
         return statement
 
-    return _series_from_rows(statement["rows"], definition["field"])
+    return {
+        "data": _series_from_rows(statement["rows"], definition["field"]),
+        "source": statement["source"],
+    }
+
+
+def get_financial_metric_series(ticker: str, metric: str) -> list[dict[str, float | int]] | str:
+    result = get_financial_metric_series_with_source(ticker, metric)
+    if isinstance(result, str):
+        return result
+    return result["data"]
 
 
 def get_financial_metrics_bundle(ticker: str) -> dict[str, Any] | str:
